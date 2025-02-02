@@ -5,21 +5,16 @@ from typing import Any, Literal
 
 import gymnasium as gym
 from pygba import PyGBA
-import mgba.core
 import mgba.image
 import numpy as np
-
-from pygba import PyGBA
 from torch.utils.tensorboard import SummaryWriter
 
-try:
-    import pygame
-    from pygame import gfxdraw
-except ImportError as e:
-    pass
+import pygame
 
 from mgba.gba import GBA
 
+# GBA control
+# Select key is not used in the game
 KEY_MAP = {
     "up": GBA.KEY_UP,
     "down": GBA.KEY_DOWN,
@@ -32,6 +27,7 @@ KEY_MAP = {
     "start": GBA.KEY_START,
 }
 
+# Pillow image to pygame image
 def _pil_image_to_pygame(img):
     
     return pygame.image.fromstring(img.tobytes(), img.size, img.mode).convert()
@@ -46,7 +42,6 @@ class RMZ3Env(gym.Env):
     def __init__(
         self,
         gba: PyGBA,
-        # raw_state: Any,
         obs_type: Literal["rgb", "grayscale"] = "rgb",
         frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
         frame_save: bool = True,
@@ -66,10 +61,10 @@ class RMZ3Env(gym.Env):
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps
 
-        self.arrow_keys = [None, "up", "down", "right", "left"]
-        self.buttons = [None, "A", "B", "start", "L", "R"]
 
         # cartesian product of arrows and buttons, i.e. can press 1 arrow and 1 button at the same time
+        self.arrow_keys = [None, "up", "down", "right", "left"]
+        self.buttons = [None, "A", "B", "start", "L", "R"]
         self.actions = [(a, b) for a in self.arrow_keys for b in self.buttons]
         self.action_space = gym.spaces.Discrete(len(self.actions))
 
@@ -80,9 +75,9 @@ class RMZ3Env(gym.Env):
         else:  # grayscale
             screen_size += (1,)  # Single channel
         self.observation_space = gym.spaces.Box(
-            low=0, 
-            high=255, 
-            shape=screen_size, 
+            low=0,
+            high=255,
+            shape=screen_size,
             dtype=np.uint8
         )
 
@@ -126,7 +121,6 @@ class RMZ3Env(gym.Env):
         # Save initial state
         if reset_to_initial_state:
             self._initial_state = self.gba.core.save_raw_state()
-            pass
         else:
             self._initial_state = None
             
@@ -144,7 +138,9 @@ class RMZ3Env(gym.Env):
         # Reset the environment
         self.reset()
 
-        self.writer = SummaryWriter(log_dir=f'logs/RockmanZero3_{self.rank:02d}')
+        # Initialize Tensorboard writter 
+        self.writer = SummaryWriter(log_dir=f'log/RockmanZero3_{self.rank:02d}')
+
     def get_action_by_id(self, action_id: int) -> tuple[Any, Any]:
         if action_id < 0 or action_id > len(self.actions):
             raise ValueError(f"action_id {action_id} is invalid")
@@ -172,8 +168,8 @@ class RMZ3Env(gym.Env):
         self.stage = self.gba.read_u16(0x0202FE60)
         self.checkpoint = self.gba.read_u16(0x0202FE62) - 65280
         self.ingame_timer = self.gba.read_u16(0x0202FE28) / 60
-        if self.ingame_timer > self.prev_ingame_timer:
-            self.ingame_timer = self.prev_ingame_timer
+        self.ingame_timer = self.prev_ingame_timer
+
 
         info = {
             "norm_health": self.health / 16,
@@ -190,6 +186,7 @@ class RMZ3Env(gym.Env):
         if np.random.random() > self.repeat_action_probability:
             self.gba.core.set_keys(*actions)
 
+        # Skip frames
         if isinstance(self.frameskip, tuple):
             frameskip = np.random.randint(*self.frameskip)
         else:
@@ -199,6 +196,7 @@ class RMZ3Env(gym.Env):
             self.gba.core.run_frame()
         observation = self._get_observation()
 
+        # Save frames if frame_save set to True
         if self.frame_save and self.frames_path is not None:
             # print(self._step)
             if (self._step + 1) % self.frame_save_freq == 0:
@@ -227,6 +225,7 @@ class RMZ3Env(gym.Env):
             self._total_reward += (reward - self._prev_reward)
         self._prev_reward = reward
 
+        # Save total reward to Tensorboard
         self.writer.add_scalar('Total reward', self._total_reward, self._step)
 
         self._step += 1
@@ -287,6 +286,8 @@ class RMZ3Env(gym.Env):
 
         self._total_reward = 0
         self._step = 0
+
+        # Load inital state and run
         if self._initial_state is not None:
             self.gba.core.load_raw_state(self._initial_state)
             self.gba.core.run_frame()
@@ -340,7 +341,7 @@ class RMZ3Env(gym.Env):
             return np.array(img)
 
     def close(self):
-        # self.writer.close()
+        self.writer.close()
         if self._screen is not None:
             if "pygame" not in sys.modules:
                 pygame.display.quit()

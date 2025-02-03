@@ -24,7 +24,6 @@ class CNNLSTM(nn.Module):
             self.cnn_output_size = self.cnn(dummy_input).shape[1]
 
         # LSTM and final layers
-        # Use cuDNN-optimized LSTM
         self.lstm = nn.LSTM(self.cnn_output_size, 512, 
                         batch_first=True,
                         dropout=0.2,
@@ -33,6 +32,6 @@ class CNNLSTM(nn.Module):
         self.fc = nn.Linear(512, action_space_size)
         
     def forward(self, x, hidden=None):
-        spatial_features = self.cnn(x.permute(0, 3, 1, 2))  # NHWC to NCHW
-        lstm_out, hidden = self.lstm(spatial_features.unsqueeze(1), hidden)
+        features = self.cnn(x.permute(0, 3, 1, 2))  # NHWC to NCHW
+        lstm_out, hidden = self.lstm(features.unsqueeze(1), hidden)
         return torch.softmax(self.fc(lstm_out.squeeze(1)), dim=-1), hidden

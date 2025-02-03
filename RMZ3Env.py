@@ -168,9 +168,7 @@ class RMZ3Env(gym.Env):
         self.stage = self.gba.read_u16(0x0202FE60)
         self.checkpoint = self.gba.read_u16(0x0202FE62) - 65280
         self.ingame_timer = self.gba.read_u16(0x0202FE28) / 60
-        self.ingame_timer = self.prev_ingame_timer
-
-
+        
         info = {
             "norm_health": self.health / 16,
             "norm_life_count": self.life_count / 2,
@@ -209,8 +207,8 @@ class RMZ3Env(gym.Env):
         # Reward is calculated by adding up all the normalized values and subtracting the minimum normalized
         # ingame timer and total play time. This encourages the agent to focus on the most important aspects
         # of the game.
-        reward = (info['norm_health'] + info['norm_life_count'] +
-                  info['norm_stage'] + info['norm_checkpoint']) - \
+        reward = (info['norm_health'] + info['norm_life_count'] * \
+                  (info['norm_stage'] * 1.5 + info['norm_checkpoint'] * 0.5)) - \
                     (min(info['ingame_timer'] / ((3*60*60)/16), 1) * \
                       2 + min(info['total_play_time'] / (3*60*60), 1)) * 2
 
@@ -225,10 +223,12 @@ class RMZ3Env(gym.Env):
             self._total_reward += (reward - self._prev_reward)
         self._prev_reward = reward
 
-        # Save total reward to Tensorboard
+        # Save total reward, lifes count to Tensorboard
         self.writer.add_scalar('Total reward', self._total_reward, self._step)
+        self.writer.add_scalar('Lifes', self.life_count, self._step)
 
         self._step += 1
+        self.prev_ingame_timer = self.ingame_timer
 
         return observation, reward, done, truncated, info
     
@@ -247,12 +247,12 @@ class RMZ3Env(gym.Env):
                 and self.ingame_timer == self.prev_ingame_timer
     
     def game_over(self) -> bool:
-        # Return if character has no life left or total play time has exceeded 3 hours
-        # or ingame timer has exceeded 450 seconds
-        # or total play time has exceeded 675 seconds
+        # Return if character has died and no life left or
+        # total play time has exceeded 3 hours
+        # or ingame timer has exceeded 25 minutes
         return (self.life_count <= 0 and self.total_play_time > 0 and self.health <= 0) or \
                 self.total_play_time > (3 * 60 * 60) or \
-                self.ingame_timer > 450 or self.total_play_time / 16 > 675
+                self.ingame_timer > (25 * 60)
 
     def reset(self, seed=None, options=None):
         # Reset game

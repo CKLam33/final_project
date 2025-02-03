@@ -39,7 +39,7 @@ class GA():
         steps = 0
 
         # Take action and collect rewards
-        while (steps < self.max_steps) or (not np.all(dones)):
+        while (steps < self.max_steps) and (not np.all(dones)):
             obs_tensor = torch.as_tensor(obs, device=self.device, dtype=torch.uint8) / 255
             with torch.no_grad():
                 action_probs, hidden = self.model(obs_tensor, hidden)
@@ -99,21 +99,25 @@ class GA():
               mutation_percent: int = 5,
               parent_selection_type: str = "rank",
               crossover_type: str = "uniform",
-              mutation_type: str = "random",
-              keep_elitism: int = 1,
+              mutation_type: str = "adaptive",
+              keep_elitism: int = 2,
+              stop_criteria: str = "no_improvement",
               suppress_warnings: bool = True):
               
         
         ga_instance = pygad.GA(
             num_generations = num_generations,
-            num_parents_mating = max(4, self.env.num_envs//4),
+            num_parents_mating = self.env.num_envs // 2,
             initial_population = self.population,
             fitness_func = self.fitness,
+            fitness_batch_size = self.env.num_envs // 2,
+            sol_per_pop = self.env.num_envs * 2,
             mutation_percent_genes = mutation_percent,
             parent_selection_type = parent_selection_type,
             crossover_type = crossover_type,
             mutation_type = mutation_type,
             keep_elitism = keep_elitism,
+            stop_criteria = stop_criteria,
             suppress_warnings = suppress_warnings
         )
 

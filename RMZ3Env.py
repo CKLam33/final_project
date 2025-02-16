@@ -98,7 +98,7 @@ class RMZ3Env(gym.Env):
         self._prev_reward = 0
         self._step = 0
 
-        # Inintialize state
+        # Go into first stage
         self.gba.wait(10)
         self.gba.press_start(10)
         self.gba.wait(10)
@@ -128,25 +128,27 @@ class RMZ3Env(gym.Env):
         self._kwargs = kwargs
 
         # Initialize state
+        self._get_game_data()
+        self.prev_checkpoint_time = 0
+        self.total_play_time = 0
+        self.same_pos_count = 0
+        self.best_stage = self.curr_stage
+        self.best_checkpoint = self.curr_checkpoint
+
+        # Reset the environment
+        self.reset()
+
+    def _get_game_data(self):
         self.x_pos = self.gba.read_u16(0x02037CB4)
         self.prev_x_pos = self.gba.read_u16(0x02037D60)
         self.health = self.gba.read_u8(0x02037D04)
         self.life_count = self.gba.read_u8(0x02036F70)
-        self.weapons = hex(self.gba.read_u16(0x02037D2A))
         self.curr_stage = self.gba.read_u8(0x0202FE60)
         self.curr_checkpoint = self.gba.read_u8(0x0202FE62)
         self.checkpoint_time = self.gba.read_u16(0x0202FF40) / 60
         self.exskills_1 = self.gba.read_u16(0x02037D28) & 0x000F
         self.exskills_2 = (self.gba.read_u16(0x02037D28) & 0x00F0) // 16
         self.exskills_3 = (self.gba.read_u16(0x02037D28) & 0x0F00) // 16**2
-        self.prev_checkpoint_time = 0
-        self.total_play_time = 0
-        self.same_pos_count = 0
-        self.best_stage = 1
-        self.best_checkpoint = 3
-
-        # Reset the environment
-        self.reset()
 
     def get_action_by_id(self, action_id: int) -> tuple[Any, Any]:
         # Convert tensor to Python scalar before comparison
@@ -173,16 +175,7 @@ class RMZ3Env(gym.Env):
 
     def step(self, action_id):
 
-        self.x_pos = self.gba.read_u16(0x02037CB4)
-        self.prev_x_pos = self.gba.read_u16(0x02037D60)
-        self.health = self.gba.read_u8(0x02037D04)
-        self.life_count = self.gba.read_u8(0x02036F70)
-        self.exskills_1 = self.gba.read_u16(0x02037D28) & 0x000F
-        self.exskills_2 = (self.gba.read_u16(0x02037D28) & 0x00F0) // 16
-        self.exskills_3 = (self.gba.read_u16(0x02037D28) & 0x0F00) // 16**2
-        self.curr_stage = self.gba.read_u8(0x0202FE60)
-        self.curr_checkpoint = self.gba.read_u8(0x0202FE62)
-        self.checkpoint_time = self.gba.read_u16(0x0202FF40) / 60 # Value / 60fps ->seconds
+        self._get_game_data()
         self.total_play_time += (self.checkpoint_time - self.prev_checkpoint_time)
         self.prev_checkpoint_time = self.checkpoint_time
 
@@ -286,16 +279,7 @@ class RMZ3Env(gym.Env):
             # 2. run_frame after resetting the state, offsetting the savestate by one frame
             self.gba.core.run_frame()
 
-        self.x_pos = self.gba.read_u16(0x02037CB4)
-        self.prev_x_pos = self.gba.read_u16(0x02037D60)
-        self.health = self.gba.read_u8(0x02037D04)
-        self.life_count = self.gba.read_u8(0x02036F70)
-        self.exskills_1 = self.gba.read_u16(0x02037D28) & 0x000F
-        self.exskills_2 = (self.gba.read_u16(0x02037D28) & 0x00F0) // 16
-        self.exskills_3 = (self.gba.read_u16(0x02037D28) & 0x0F00) // 16**2
-        self.curr_stage = self.gba.read_u8(0x0202FE60)
-        self.curr_checkpoint = self.gba.read_u8(0x0202FE62)
-        self.checkpoint_time = self.gba.read_u16(0x0202FF40) / 60
+        self._get_game_data()
         self.prev_checkpoint_time = 0
         self.total_play_time = 0
         self.same_pos_count = 0

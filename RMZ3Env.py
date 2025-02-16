@@ -267,7 +267,6 @@ class RMZ3Env(gym.Env):
 
 
     def reset(self, seed=None, options=None):
-        super().reset()
         # Reset game
         self.gba.core.reset()
         # Load initial state

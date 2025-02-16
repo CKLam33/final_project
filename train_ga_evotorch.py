@@ -6,6 +6,7 @@ from evotorch.logging import StdOutLogger, PandasLogger, MlflowLogger
 import gymnasium as gym
 import mlflow
 from RMZ3Env import make_RMZ3Env
+import pickle
 
 problem = GymNE(
     env=make_RMZ3Env,
@@ -47,7 +48,9 @@ run = mlflow.start_run()
 MlflowLogger(searcher, client=client, run=run)
 
 searcher.run(500)
+
 solutions = searcher.status
+pickle.dump(solutions, open("GA_solutions.pkl", "wb"))
 
 df = pandas_logger.to_dataframe()
 df.to_csv("GA_results.csv", index=False)

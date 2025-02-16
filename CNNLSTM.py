@@ -59,7 +59,7 @@ class CNNLSTM(nn.Module):
         x = x.permute(0, 3, 2, 1)  # Channel-first for Conv2d
         
         # CNN Feature extraction
-        features = self.cnn(x)  # (batch, cnn_out_dim)
+        features = self.cnn(x).to("cuda")  # (batch, cnn_out_dim)
         
         # LSTM Processing
         lstm_out, self.hidden = self.lstm(features, self.hidden)

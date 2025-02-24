@@ -1,20 +1,20 @@
+from itertools import product
 import sys
-from typing import Any, Literal
+from typing import Any, Literal, Callable, List, Tuple, Dict, Optional
 from pathlib import Path
 
 import gymnasium as gym
+from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
-from gymnasium.wrappers import ResizeObservation
-from pygba import PyGBA
+from gymnasium.wrappers import ResizeObservation, GrayscaleObservation, RecordVideo
 import mgba.image
 import numpy as np
+from pygba import PyGBA
 
 import pygame
 
 from mgba.gba import GBA
 from mgba.log import silence
-
-# silence()
 
 # GBA control
 # Select key is not used in the game
@@ -30,11 +30,29 @@ KEY_MAP = {
     "start": GBA.KEY_START,
 }
 
+# Boss location
+# checkpoint: [stages]
+BOSS_LOCATION = {
+    5: [7, 8, 9, 10, 12],
+    6: [1, 4, 6, 11, 13, 14],
+    7: [2, 5],
+    8: [15],
+    9: [3, 16]
+}
+
+# Final boss location in last stage
+FINAL_STAGE_BOSSES = {
+    3: [1, 2, 3, 4],
+    6: [5, 6, 7, 8],
+    9: [1, 3, 7]
+}
+
 # Pillow image to pygame image
 def _pil_image_to_pygame(img):
     
     return pygame.image.fromstring(img.tobytes(), img.size, img.mode).convert()
 
+# Basic Rockman Zero 3 Environment
 class RMZ3Env(gym.Env):
 
     metadata = {
@@ -51,7 +69,7 @@ class RMZ3Env(gym.Env):
         frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
         repeat_action_probability: float = 0.0,
         render_mode: Literal["human", "rgb_array"] | None = "human",
-        reset_to_last_state: bool = True,
+        reset_to_initial_state: bool = True,
         max_episode_steps: int | None = None,
         **kwargs,
     ):
@@ -66,12 +84,16 @@ class RMZ3Env(gym.Env):
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps
 
-        # cartesian product of arrows and buttons, i.e. can press 1 arrow and 1 button at the same time
-        self.arrow = [None, "up", "down", "right", "left"]
-        self.LR = [None, "L", "R"]
-        self.AB =[None, "A", "B"]
-        self.actions = [(a, b, c) for a in self.arrow for b in self.LR for c in self.AB]
-        self.actions.append((None, None, "start"))
+        # Generate all possible product of buttons.
+        # So that even the AI change the key setting accidentally,
+        # it still about to control the character
+        arrow = [None, "up", "down", "right", "left"]
+        L = [None, "L"]
+        R = [None, "R"]
+        A = [None, "A"]
+        B = [None, "B"]
+        self.actions = list(product(arrow, L, R, A, B))
+        self.actions.append((None, None, None, None, "start"))
         self.action_space = Discrete(len(self.actions))
 
         # Building the observation_space
@@ -120,20 +142,22 @@ class RMZ3Env(gym.Env):
                 self.gba.wait(30)
 
         # Save initial state
-        if reset_to_last_state:
-            self._last_state = self.gba.core.save_raw_state()
+        if reset_to_initial_state:
+            self._initial_state = self.gba.core.save_raw_state()
+            pass
         else:
-            self._last_state = None
+            self._initial_state = None
             
         self._kwargs = kwargs
 
         # Initialize state
         self._get_game_data()
-        self.prev_checkpoint_time = 0
         self.total_play_time = 0
         self.same_pos_count = 0
         self.best_stage = self.curr_stage
         self.best_checkpoint = self.curr_checkpoint
+        self.prev_stage = self.curr_stage
+        self.prev_checkpoint = self.curr_checkpoint
 
         # Reset the environment
         self.reset()
@@ -149,19 +173,18 @@ class RMZ3Env(gym.Env):
         self.exskills_1 = self.gba.read_u16(0x02037D28) & 0x000F
         self.exskills_2 = (self.gba.read_u16(0x02037D28) & 0x00F0) // 16
         self.exskills_3 = (self.gba.read_u16(0x02037D28) & 0x0F00) // 16**2
+        self.boss_health = self.gba.read_u16(0x0203BB04)
+        self.final_subbosses_room = self.gba.read_u16(0x0202FE6B)
 
     def get_action_by_id(self, action_id: int) -> tuple[Any, Any]:
-        # Convert tensor to Python scalar before comparison
         if action_id < 0 or action_id > len(self.actions):
             raise ValueError(f"action_id {action_id} is invalid")
         return self.actions[action_id]
 
-
-
-    def get_action_id(self, arrow: str, LR: str, AB: str) -> int:
-        action = (arrow, LR, AB)
+    def get_action_id(self, arrow: str, buttonL: str, buttonR: str, buttonA: str, buttonB: str ) -> int:
+        action = (arrow, buttonL, buttonR, buttonA, buttonB)
         if action not in self.actions:
-            raise ValueError(f"Invalid action: Must be a tuple of (arrow, LR, AB)")
+            raise ValueError(f"Invalid action: Must be a tuple of (arrow, button)")
         return self.actions.index(action)
 
     def _get_observation(self):
@@ -176,23 +199,7 @@ class RMZ3Env(gym.Env):
     def step(self, action_id):
 
         self._get_game_data()
-        self.total_play_time += (self.checkpoint_time - self.prev_checkpoint_time)
-        self.prev_checkpoint_time = self.checkpoint_time
-
-        if (self.curr_stage, self.curr_checkpoint) > (self.best_stage, self.best_checkpoint):
-            self.best_stage, self.best_checkpoint = self.curr_stage, self.curr_checkpoint
-            self._last_state = self.gba.core.save_raw_state()
-        
-        info = {
-            "health": self.health,
-            "life_count": self.life_count,
-            "total_play_time": self.total_play_time,
-            "total_rewards": self._total_reward,
-            "current_stage": self.curr_stage,
-            "current_checkpoint": self.curr_checkpoint,
-            "best_stage": self.best_stage,
-            "best_checkpoint": self.best_checkpoint
-        }
+        self.total_play_time += ((1 + self.frameskip) / 60)
 
         actions = self.get_action_by_id(action_id)
         actions = [KEY_MAP[a] for a in actions if a is not None]
@@ -212,66 +219,70 @@ class RMZ3Env(gym.Env):
             self.gba.core.run_frame()
         observation = self._get_observation()
 
-        health_life = self.health // 16 + self.life_count // 2
-        stage_checkpoint = (self.curr_stage // 16 + self.curr_checkpoint // 7) if self.curr_stage < 17 and self.curr_checkpoint < 8 else 0
-        ex_skills = (self.exskills_1 + self.exskills_2 + self.exskills_3) / 12
-        reward = (health_life + stage_checkpoint + ex_skills) - (self.total_play_time / (60*60*3))
-            
-        if self.x_pos == self.prev_x_pos:
-            self.same_pos_count += 1
-        else:
-            self.same_pos_count = 0
+        # Calculate reward
+        health_life = self.health // 16 + self.life_count // 2 # Reward if still alive
+        # Reward start from second checkpoint in first stage and
+        # not give any reward if character is in Commander base
+        stage_checkpoint = (self.curr_stage // 16 + self.curr_checkpoint // 9) \
+                            if (self.curr_stage < 17) and (self.curr_stage >= 1 and self.curr_checkpoint > 3) else 0
+        ex_skills = (self.exskills_1 + self.exskills_2 + self.exskills_3) / 48
+        boss_killed = 1 if self.check_boss_killed() else 0
+        reward = ((health_life + stage_checkpoint + ex_skills) / 3) + boss_killed - ((self.total_play_time / (60 * 60)) * 0.5)
+
 
         # Check if done or truncated
-        done = self.check_if_done()
+        done = self.game_finished()
         truncated = self.check_if_truncated()
-        if self.max_episode_steps is not None:
-            truncated = self._step >= self.max_episode_steps
 
         # Update total reward
-        if self._step > 0:
-            self._total_reward += (reward - self._prev_reward)
+        self._total_reward += (reward - self._prev_reward)
         self._prev_reward = reward
-        self._last_total_reward = self._total_reward
+
+        # Update best_stage and best_checkpoint
+        if self.curr_stage < 17 and\
+            (self.curr_stage, self.curr_checkpoint) > (self.best_stage, self.best_checkpoint):
+                (self.best_stage, self.best_checkpoint) = (self.curr_stage, self.curr_checkpoint)
+
+        info = {
+            "health": self.health,
+            "life_count": self.life_count,
+            "total_play_time": self.total_play_time,
+            "total_rewards": self._total_reward,
+            "current_stage": self.curr_stage,
+            "current_checkpoint": self.curr_checkpoint,
+            "best_stage": self.best_stage,
+            "best_checkpoint": self.best_checkpoint
+        }
 
         self._step += 1
 
         return observation, reward, done, truncated, info
         
-    def generations(self, gen: int):
-        self.curr_gen = gen
+    def check_boss_killed(self) -> bool:
+        return self.boss_health == 0 and\
+                (self.curr_checkpoint in BOSS_LOCATION and self.curr_stage in BOSS_LOCATION[self.curr_checkpoint] or\
+                 (self.curr_stage == 16 and self.final_subbosses_room in FINAL_STAGE_BOSSES[self.curr_checkpoint]))
     
-    def check_if_truncated(self):
+    def check_if_truncated(self) -> bool:
         return (self.max_episode_steps is not None and 
-                (self._step + 1 >= self.max_episode_steps))
-    
-    def check_if_done(self):
-        if self.game_over() or self.game_finished():
-            return True
-        return False
+                (self._step >= self.max_episode_steps)) or\
+                self.curr_stage < 17 and self.checkpoint_time > 60 or\
+                self.same_pos_count > 30 * (60 / 1 + self.frameskip) or\
+                (self.life_count <= 0 and self.health <= 0)
+
     
     def game_finished(self) -> bool:
         # Return if game completed successfully
-        return self.curr_stage == 16 and self.curr_checkpoint == 8
-    
-    def game_over(self) -> bool:
-        # Return True if character has died and no life left or
-        # total play time has exceeded 3 hours or
-        # time spent in current checkpoint has exceeded 5 minutes or
-        # the charaction does not move over 10 seconds
-        if self.life_count <= 0 and self._step > 0 and self.health <= 0 or\
-            self.total_play_time > (3 * 60 * 60) or self.checkpoint_time > (5 * 60) or\
-            self.same_pos_count > 10 * 60:
-            return True
-        return False
+        return self.curr_stage == 16 and self.curr_checkpoint == 9 and\
+                self.final_subbosses_room == 7 and self.boss_health == 0
 
 
     def reset(self, seed=None, options=None):
         # Reset game
         self.gba.core.reset()
         # Load initial state
-        if self._last_state is not None:
-            self.gba.core.load_raw_state(self._last_state)
+        if self._initial_state is not None:
+            self.gba.core.load_raw_state(self._initial_state)
 
             # not sure what the best solution is here:
             # 1. don't run_frame after resetting the state, will lead to the old frame still being rendered
@@ -279,7 +290,6 @@ class RMZ3Env(gym.Env):
             self.gba.core.run_frame()
 
         self._get_game_data()
-        self.prev_checkpoint_time = 0
         self.total_play_time = 0
         self.same_pos_count = 0
 
@@ -291,10 +301,8 @@ class RMZ3Env(gym.Env):
             "current_stage": self.curr_stage,
             "current_checkpoint": self.curr_checkpoint
         }
-        if self.curr_stage >= 1 and self.curr_checkpoint > 1:
-            self._total_reward = self._last_total_reward
-        else:
-            self._total_reward = 0
+
+        self._total_reward = 0
         self._step = 0
         
         observation = self._get_observation()
@@ -351,22 +359,29 @@ class RMZ3Env(gym.Env):
                 pygame.display.quit()
                 pygame.quit()
 
-def make_RMZ3Env(gba_rom: str | Path,
-                 gba_sav: str | Path,
-                 obs_type:  Literal["rgb", "grayscale"] = "rgb",
-                 render_mode: Literal["human", "rgb_array"] | None = "human",
-                 frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
-                 mgba_silence: bool = False,
-                 resize: bool = True,
-                 **kwargs):
+# Create callable that works for GymNE from EvoTroch 
+def make_RMZ3Env(
+        gba_rom: str | Path,
+        gba_sav: str | Path,
+        render_mode: Literal["human", "rgb_array"] | None = "human",
+        frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
+        mgba_silence: bool = False,
+        to_resize: bool = True,
+        to_grayscale: bool = False,
+        record: bool = False,
+        record_path: str | Path = None,
+        **kwargs
+        ) -> Callable[[], Env]:
     env = RMZ3Env(gba_rom = gba_rom,
                    gba_sav = gba_sav,
-                   obs_type = obs_type,
                    render_mode = render_mode,
                    frameskip = frameskip,
                    mgba_silence = mgba_silence,
                    **kwargs)
-    if resize:
+    if record and record_path is not None:
+        env = RecordVideo(env, video_folder = record_path)
+    if to_resize:
         env = ResizeObservation(env, (120, 80))
+    if to_grayscale:
+        env = GrayscaleObservation(env, keep_dim=True)
     return env
-    

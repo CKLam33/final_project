@@ -8,8 +8,8 @@ class CNNLSTM(nn.Module):
         self,
         obs_shape: tuple,
         act_length: int,
-        hidden_size: int,
-        num_layers: int,
+        hidden_size: int = 128,
+        num_layers: int = 1,
         **kwargs
     ):
         super().__init__()
@@ -19,53 +19,61 @@ class CNNLSTM(nn.Module):
         
         # CNN Feature Extractor
         self.cnn = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
-            nn.ReLU6(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU6(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU6(),
-            nn.Flatten()
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.Flatten(),
         )
         
         # Calculate CNN output size dynamically
         with torch.no_grad():
-            dummy_input = torch.zeros(1, *obs_shape).permute(0, 3, 2, 1)
+            dummy_input = None
+            if len(obs_shape) == 2:
+                dummy_input = torch.zeros(1, *obs_shape).permute(0, 2, 1)
+            elif len(obs_shape) == 3:
+                dummy_input = torch.zeros(*obs_shape).permute(2, 1, 0)  # Channel-first for Conv2d
+            elif len(obs_shape) == 4:
+                dummy_input = torch.zeros(*obs_shape).permute(0, 3, 2, 1)  # Channel-first for Conv2d
+    
             cnn_out_dim = self.cnn(dummy_input).shape[1]
             
         # LSTM Network
         self.lstm = nn.LSTM(
-            input_size=cnn_out_dim,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=True
+            input_size = cnn_out_dim,
+            hidden_size = hidden_size,
+            num_layers = num_layers,
+            batch_first = True,
+            bidirectional = False
         )
         
         # Final output layer
-        self.fc = nn.Linear(hidden_size * 2, act_length)
+        self.fc = nn.Linear(hidden_size, act_length)
         
         # Hidden state management
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
         self.hidden = None
 
-    # if cnn read (c, w, h)
     def forward(self, x):
         # Normalize the input
         x = x / 255.0
-        # Input shape: (C, W, H) -> (batch, C, H, W)
-        x = x.unsqueeze(0)
-        x = x.permute(0, 3, 2, 1)  # Channel-first for Conv2d
-        
-        # CNN Feature extraction
-        features = self.cnn(x)  # (batch, cnn_out_dim)
+        if len(x.shape) == 2:
+            # Input shape: (W, H) -> (C, H, W), for grayscale
+            x = x.unsqueeze(0).permute(0, 2, 1)
+        elif len(x.shape) == 3:
+            # Input shape: (C, W, H) -> (batch, C, H, W)
+            x = x.permute(2, 1, 0)  # Channel-first for Conv2d
+        elif len(x.shape) == 4:
+            # Input shape: (C, W, H, D) -> (batch, C, H, W, D)
+            x = x.permute(0, 3, 2, 1)  # Channel-first for Conv2d
         
         # LSTM Processing
-        lstm_out, self.hidden = self.lstm(features, self.hidden)
+        lstm_out, self.hidden = self.lstm(self.cnn(x), self.hidden)
         
         # Get final output
         out = self.fc(lstm_out[-1, :]).detach()
+
         # return a np.int46 value
         return out
 

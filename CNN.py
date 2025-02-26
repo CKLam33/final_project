@@ -59,7 +59,7 @@ class CNN(nn.Module):
             x = x.permute(2, 1, 0)  # Channel-first for Conv2d
 
         elif len(x.shape) == 4:
-            # Input shape: (Batch, W, H, C) -> (batch, C, H, W)
+            # Input shape: (C, W, H, D) -> (batch, C, H, W, D)
             x = x.permute(0, 3, 2, 1)  # Channel-first for Conv2d
 
         # Get final output

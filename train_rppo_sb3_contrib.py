@@ -8,7 +8,7 @@ import mlflow
 import numpy as np
 from RMZ3Env import make_RMZ3Env
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from sb3_contrib import RecurrentPPO
 import torch
@@ -54,9 +54,9 @@ def make_env():
             gba_rom = GBA_ROM,
             gba_sav = GBA_SAV,
             render_mode = RENDER_MODE,
-            frameskip = FRAMESKIP,
             max_episode_steps = MAX_STEPS,
             mgba_silence = SILENCE,
+            use_framestack = 0,
             to_resize = RESIZE,
             to_grayscale = True
             )
@@ -65,7 +65,7 @@ def make_env():
 
 envs = [make_env() for _ in range(POPSIZE)]
 
-envs = SubprocVecEnv(envs, start_method="fork")
+envs = VecFrameStack(SubprocVecEnv(envs, start_method="fork"), FRAMESTACK) # use framestack from SB3 instead
 
 policy_kwargs = {
     "lstm_hidden_size": HIDDEN_SIZE,
@@ -74,7 +74,7 @@ policy_kwargs = {
 }
 
 checkpoint_callback = CheckpointCallback(
-  save_freq = 1080,
+  save_freq = 500,
   save_path = PATH.joinpath("/checkpoints/"),
   name_prefix = "rppo_model",
 )
@@ -84,9 +84,9 @@ agent = RecurrentPPO("CnnLstmPolicy",
                     envs,
                     verbose = 1,
                     policy_kwargs = policy_kwargs,
+                    device = "cuda:1"
                     )
 
-timesteps = MAX_STEPS * GENERATIONS # (Average gameplay duration over Frameskip) * generations
 agent.set_logger(logger)
 start_time = datetime.now()
 agent.learn(total_timesteps = TOTAL_TIMESTEPS,

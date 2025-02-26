@@ -8,7 +8,7 @@ import mlflow
 import numpy as np
 from RMZ3Env import make_RMZ3Env
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from stable_baselines3 import PPO
 import torch
@@ -54,33 +54,37 @@ def make_env():
             gba_rom = GBA_ROM,
             gba_sav = GBA_SAV,
             render_mode = RENDER_MODE,
-            frameskip = FRAMESKIP,
             max_episode_steps = MAX_STEPS,
             mgba_silence = SILENCE,
+            use_framestack = 0,
             to_resize = RESIZE,
-            to_grayscale = GRAYSCALE
+            to_grayscale = True
             )
         return env
     return _init
 
 envs = [make_env() for _ in range(POPSIZE)]
 
-envs = SubprocVecEnv(envs, start_method="fork")
+envs = VecFrameStack(SubprocVecEnv(envs, start_method="fork"), FRAMESTACK) # use framestack from SB3 instead
+
+policy_kwargs = {
+    "activation_fn": nn.ReLU,
+}
 
 checkpoint_callback = CheckpointCallback(
-  save_freq = 60 * 60 // (FRAMESKIP + 1),
+  save_freq = 500,
   save_path = PATH.joinpath("/checkpoints/"),
   name_prefix = "ppo_model",
 )
 
 # Setup agent and train
 agent = PPO("CnnPolicy",
-            envs,
-            verbose = 1,
-            policy_kwargs = {"activation_fn": nn.ReLU}
-           )
+                    envs,
+                    verbose = 1,
+                    policy_kwargs = policy_kwargs,
+                    device = "cuda:0"
+                    )
 
-timesteps = MAX_STEPS * GENERATIONS # (Average gameplay duration over Frameskip) * generations
 agent.set_logger(logger)
 start_time = datetime.now()
 agent.learn(total_timesteps = TOTAL_TIMESTEPS,
@@ -88,10 +92,10 @@ agent.learn(total_timesteps = TOTAL_TIMESTEPS,
             log_interval=10,
             callback=checkpoint_callback)
 
-end_time = datetime.now()
 agent.save(path = PATH.joinpath("/final_model/"))
     
-with open(PATH.joinpath("training_duration.txt"), "w") as f:
-    f.write(f"Time taken in training:{end_time - start_time}")
-    f.close()
+end_time = datetime.now()
+f = open(PATH.joinpath("training_duration.txt"), "w+")
+f.write(f"Time taken in training:{end_time - start_time}")
+f.close
 envs.close()

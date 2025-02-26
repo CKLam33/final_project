@@ -4,7 +4,7 @@ import pickle
 
 from CNN import CNN
 from env_setup import *
-from evotorch.algorithms import PGPE,Cosyne
+from evotorch.algorithms import Cosyne
 from evotorch.neuroevolution import GymNE
 from evotorch.logging import MlflowLogger, PicklingLogger, StdOutLogger
 import mlflow
@@ -22,10 +22,11 @@ problem = GymNE(
         "gba_rom": GBA_ROM,
         "gba_sav": GBA_SAV,
         "render_mode": RENDER_MODE,
-        "frameskip": FRAMESKIP,
+        "max_episode_steps": MAX_STEPS,
         "mgba_silence": SILENCE,
         "resize": RESIZE,
         "to_grayscale": GRAYSCALE,
+        "use_framestack": 4,
         "record": False,
         "record_path": PATH.joinpath("videos/")},
     network=CNN,

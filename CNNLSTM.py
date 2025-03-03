@@ -2,21 +2,26 @@ import torch
 import torch.nn as nn
 from evotorch.decorators import pass_info
 
+from AttentionModel import AttentionModel
+
 @pass_info
 class CNNLSTM(nn.Module):
     def __init__(
         self,
         obs_shape: tuple,
         act_length: int,
-        hidden_size: int = 128,
+        hidden_size: int = 256,
         num_layers: int = 1,
+        use_AttentionModel: bool = False,
         **kwargs
     ):
         super().__init__()
+
+        self.use_AttentionModel = use_AttentionModel
         
         # Extract channels from observation shape (H, W, C)
-        in_channels = obs_shape[-1]  
-        
+        in_channels = obs_shape[-1]
+
         # CNN Feature Extractor
         self.cnn = nn.Sequential(
             nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, padding=0),
@@ -25,8 +30,9 @@ class CNNLSTM(nn.Module):
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
-            nn.Flatten(),
         )
+
+        self.flatten = nn.Flatten()
         
         # Calculate CNN output size dynamically
         with torch.no_grad():
@@ -43,7 +49,11 @@ class CNNLSTM(nn.Module):
             elif len(obs_shape) == 4:
                 dummy_input = torch.zeros(*obs_shape).permute(0, 3, 2, 1)  # Channel-first for Conv2d
     
-            cnn_out_dim = self.cnn(dummy_input).shape[1]
+            cnn_out_dim = self.flatten(self.cnn(dummy_input)).shape[1]
+
+
+        
+        self.attention = AttentionModel(64)
             
         # LSTM Network
         self.lstm = nn.LSTM(
@@ -74,9 +84,19 @@ class CNNLSTM(nn.Module):
         elif len(x.shape) == 4:
             # Input shape: (C, W, H, D) -> (batch, C, H, W, D)
             x = x.permute(0, 3, 2, 1)  # Channel-first for Conv2d
-        
+
+        # Apply CNN
+        cnn_out = self.cnn(x)
+
+        if self.use_AttentionModel:
+            attn_out = self.attention(cnn_out)
+            flattened = self.flatten(attn_out)
+        else:
+            # Get final output
+            flattened = self.flatten(cnn_out)
+
         # LSTM Processing
-        lstm_out, self.hidden = self.lstm(self.cnn(x), self.hidden)
+        lstm_out, self.hidden = self.lstm(flattened, self.hidden)
         
         # Get final output
         out = self.fc(lstm_out[-1, :]).detach()

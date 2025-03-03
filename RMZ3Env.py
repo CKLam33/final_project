@@ -94,7 +94,7 @@ class RMZ3Env(gym.Env):
         repeat_action_probability: float = 0.0,
         render_mode: Literal["human", "rgb_array"] | None = "human",
         reset_to_initial_state: bool = True,
-        max_episode_steps: int | None = None,
+        max_run_time: int | None = None,
         **kwargs,
     ):
         if gba_rom is None:
@@ -106,7 +106,7 @@ class RMZ3Env(gym.Env):
         self.frameskip = frameskip
         self.repeat_action_probability = repeat_action_probability
         self.render_mode = render_mode
-        self.max_episode_steps = max_episode_steps
+        self.max_run_time = max_run_time
 
         # Generate all possible product of buttons.
         # So that even the AI change the key setting accidentally,
@@ -140,7 +140,6 @@ class RMZ3Env(gym.Env):
         self._clock = None
 
         self._total_reward = 0
-        self._last_total_reward = 0
         self._prev_reward = 0
         self._step = 0
 
@@ -185,15 +184,15 @@ class RMZ3Env(gym.Env):
         self._prev_checkpoint = self._curr_checkpoint
         init_next_pos = POSITIONS["1"]["4"]
         (self._next_xpos, self._next_ypos) = (init_next_pos[0],init_next_pos[1])
-        self._prev_dis_diff = self.cal_distance_diff((self._x_pos, self._y_pos), (self._next_xpos, self._next_ypos))
+        self._prev_dis_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
 
         # Reset the environment
         self.reset()
 
     def _get_game_data(self):
         # Get player's current position
-        self._x_pos = self.gba.read_u32(0x02037CB4)
-        self._y_pos = self.gba.read_u32(0x02037CB8)
+        self._curr_x_pos = self.gba.read_u32(0x02037CB4)
+        self._curr_y_pos = self.gba.read_u32(0x02037CB8)
         # check if all _weapons get
         self._weapons = self.gba.read_u8(0x02037D2A)
         # Health & Lives & skills
@@ -240,62 +239,75 @@ class RMZ3Env(gym.Env):
         if np.random.random() > self.repeat_action_probability:
             self.gba.core.set_keys(*actions)
 
-
         # Skip frames
         if isinstance(self.frameskip, tuple):
-            frameskip = np.random.randint(*self.frameskip)
+            self._new_frameskip = np.random.randint(*self.frameskip)
         else:
-            frameskip = self.frameskip
+            self._new_frameskip = self.frameskip
 
-        for _ in range(frameskip + 1):
+        for _ in range(self._new_frameskip + 1):
             self.gba.core.run_frame()
+
         observation = self._get_observation()
 
         self._get_game_data()
-        self._total_play_time += ((1 + self.frameskip) / 60)
-        if (self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint):
-            self._curr_chkpt_time += ((1 + self.frameskip) / 60)
-        
-
-        self._get_next_pos()
-
-        # Get other _weapons
-        if self._curr_stage == 17 and self._prev_stage == 1:
-            (self._next_xpos, self._next_ypos) = (900736, 159743)
-            if self._weapons == 15:
-                (self._prev_stage, self._prev_checkpoint) = (self._curr_stage, self._curr_checkpoint)
-                (self._next_xpos, self._next_ypos) = (92288, 118783)
+        self._total_play_time += ((1 + self._new_frameskip) / 60)
 
         # Update previous stage-checkpoint
-        if (self._curr_stage, self._curr_checkpoint) > (self._prev_stage, self._prev_checkpoint):
+        if (self._curr_stage, self._curr_checkpoint) > (self._prev_stage, self._prev_checkpoint) and self._curr_stage != 17:
             (self._prev_stage, self._prev_checkpoint) = (self._curr_stage, self._curr_checkpoint)
-            self._curr_chkpt_time = (1 + self.frameskip) / 60
+            self._curr_chkpt_time = (1 + self._new_frameskip) / 60
+
+        if (self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint):
+            self._curr_chkpt_time += ((1 + self._new_frameskip) / 60)
+
+        # Update next target position
+        if self._curr_stage == 17 and self._prev_stage == 1:
+            (self._next_xpos, self._next_ypos) = (900736, 159743) # go to get weapons
+            if self._weapons == 15:
+                (self._prev_stage, self._prev_checkpoint) = (self._curr_stage, self._curr_checkpoint)
+                (self._next_xpos, self._next_ypos) = (92288, 118783) # Back to portal
+        else:
+            self._get_next_pos()
+
 
         # Calculate reward
-        _health_life = self._health // 16 + self._lives // 2 # Reward if still alive
+        health_life_reward = self._health // 16 + self._lives // 2 # Reward if still alive
         # Reward start from second checkpoint in first stage and
         # not give any reward if character is in Commander base
-        stage_checkpoint = (self._curr_stage // 16 + self._curr_checkpoint // 9) \
-                            if (self._curr_stage < 17) and (self._curr_stage >= 1 and self._curr_checkpoint > 3) else 0
-        new_distnace_diff = self.cal_distance_diff((self._x_pos, self._y_pos), (self._next_xpos, self._next_ypos))
-        ex_skills = (self._exskills_1 + self._exskills_2 + self._exskills_3) / 48
-        boss_killed = 1 if self.check_boss_killed() else 0
-        reward = ((_health_life + stage_checkpoint + ex_skills) / 3)\
-                    + (1 / (self._prev_dis_diff - new_distnace_diff))\
-                        if (self._prev_dis_diff - new_distnace_diff) > 0\
-                    else 1\
-                    + boss_killed\
-                    - ((self._total_play_time / 60) * 1.25)
+        stage_checkpoint_reward = (self._curr_stage / 16 + self._curr_checkpoint / 9) \
+                            if (self._curr_stage < 17) and self._curr_stage >= 1 else 0
+        if self._curr_stage in STAGE_CHKPT_LIST:
+            if self._curr_checkpoint == STAGE_CHKPT_LIST[self._curr_stage][-1]:
+                pos_reward = 1
+            else:
+                new_distnace_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
+                if new_distnace_diff != self._prev_dis_diff:
+                    pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
+                    self._same_pos_count = 0
+                else:
+                    pos_reward = 0
+                    self._same_pos_count += ((1 + self._new_frameskip) / 60)
 
-        self._prev_dis_diff = new_distnace_diff
+                self._prev_dis_diff = new_distnace_diff
+        else:
+            pos_reward = 0
 
+        ex_skills_reward = (self._exskills_1 + self._exskills_2 + self._exskills_3) / 48
+        boss_killed_reward = 5 if self.check_boss_killed() else 0
+        time_penalty = (self._total_play_time / (60 * 60))
+        reward = health_life_reward + stage_checkpoint_reward + ex_skills_reward\
+                    + pos_reward * 2\
+                    + boss_killed_reward\
+                    - time_penalty
 
         # Check if done or truncated
         done = self.game_finished()
         truncated = self.check_if_truncated()
 
         # Update total reward
-        self._total_reward += (reward - self._prev_reward)
+        reward_diff = reward - self._prev_reward
+        self._total_reward += reward_diff
         self._prev_reward = reward
 
         # Update best_stage and best_checkpoint
@@ -311,28 +323,27 @@ class RMZ3Env(gym.Env):
             "current_stage": self._curr_stage,
             "current_checkpoint": self._curr_checkpoint,
             "best_stage": self.best_stage,
-            "best_checkpoint": self.best_checkpoint
+            "best_checkpoint": self.best_checkpoint,
+            "diff_diff": new_distnace_diff,
+            "distance_diff": new_distnace_diff
         }
 
         self._step += 1
 
-        return observation, reward, done, truncated, info
+        return observation, reward_diff, done, truncated, info
     
     def _get_next_pos(self):
         # if not in commander base
         # target will be move to next position
         if self._curr_stage < 17:
-            stage_len = len(STAGE_CHKPT_LIST[self._curr_stage])
+            chkpts_len = len(STAGE_CHKPT_LIST[self._curr_stage])
             if self._curr_checkpoint in STAGE_CHKPT_LIST[self._curr_stage]:
                 idx = STAGE_CHKPT_LIST[self._curr_stage].index(self._curr_checkpoint)
-                if idx < stage_len - 1:
-                    next_chkpt = idx + 1
-                    if str(self._curr_stage) in POSITIONS and str(next_chkpt) in POSITIONS[str(self._curr_stage)]:
+                if idx < chkpts_len - 1:
+                    next_chkpt = STAGE_CHKPT_LIST[self._curr_stage][idx + 1]
+                    if str(next_chkpt) in POSITIONS[str(self._curr_stage)]:
                         pos_list = POSITIONS[str(self._curr_stage)][str(next_chkpt)]
                         (self._next_xpos, self._next_ypos) = (pos_list[0], pos_list[1])
-        # if back to commander base
-        if self._curr_stage == 17 and self._prev_stage != 1:
-            self.gba.press_up(5)
 
         
     def check_boss_killed(self) -> bool:
@@ -341,10 +352,9 @@ class RMZ3Env(gym.Env):
                  (self._curr_stage == 16 and self._final_subbosses_room in FINAL_STAGE_BOSSES[self._curr_checkpoint]))
     
     def check_if_truncated(self) -> bool:
-        return (self.max_episode_steps is not None and 
-                (self._step >= self.max_episode_steps)) or\
-                self._same_pos_count > 30 * (60 / 1 + self.frameskip) or\
-                (self._lives <= 0 and self._health <= 0) or\
+        return (self.max_run_time is not None and (self._step >= self.max_run_time // (1 + self._new_frameskip))) or\
+                self._same_pos_count > 30 or\
+                (self._health <= 0 and self._lives <= 0)or\
                 ((self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint) and\
                 self._curr_chkpt_time > 60)
 
@@ -368,6 +378,7 @@ class RMZ3Env(gym.Env):
             self.gba.core.run_frame()
 
         self._get_game_data()
+        self._prev_reward = 0
         self._total_play_time = 0
         self._curr_chkpt_time = 0
         self._same_pos_count = 0
@@ -377,7 +388,7 @@ class RMZ3Env(gym.Env):
         self._prev_checkpoint = self._curr_checkpoint
         init_next_pos = POSITIONS["1"]["4"]
         (self._next_xpos, self._next_ypos) = (init_next_pos[0],init_next_pos[1])
-        self._prev_dis_diff = self.cal_distance_diff((self._x_pos, self._y_pos), (self._next_xpos, self._next_ypos))
+        self._prev_dis_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
 
         info = {
             "_health": self._health,
@@ -385,7 +396,11 @@ class RMZ3Env(gym.Env):
             "_total_play_time": self._total_play_time,
             "total_rewards": self._total_reward,
             "current_stage": self._curr_stage,
-            "current_checkpoint": self._curr_checkpoint
+            "current_checkpoint": self._curr_checkpoint,
+            "next_location": (self._next_xpos, self._next_ypos),
+            "best_stage": self.best_stage,
+            "best_checkpoint": self.best_checkpoint,
+            "distance_diff": np.inf,
         }
 
         self._total_reward = 0
@@ -451,6 +466,7 @@ def make_RMZ3Env(
         gba_sav: str | Path,
         render_mode: Literal["human", "rgb_array"] | None = "human",
         frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
+        max_run_time: int | None = None,
         mgba_silence: bool = False,
         to_resize: bool = True,
         to_grayscale: bool = False,
@@ -463,6 +479,7 @@ def make_RMZ3Env(
                    gba_sav = gba_sav,
                    render_mode = render_mode,
                    frameskip = frameskip,
+                   max_run_time = max_run_time,
                    mgba_silence = mgba_silence,
                    **kwargs)
     if record and record_path is not None:

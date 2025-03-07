@@ -95,6 +95,7 @@ class RMZ3Env(gym.Env):
         render_mode: Literal["human", "rgb_array"] | None = "human",
         reset_to_initial_state: bool = True,
         max_run_time: int | None = None,
+        include_lives_count = False,
         **kwargs,
     ):
         if gba_rom is None:
@@ -140,7 +141,6 @@ class RMZ3Env(gym.Env):
         self._clock = None
 
         self._total_reward = 0
-        self._prev_reward = 0
         self._step = 0
 
         # Go into first stage
@@ -175,6 +175,7 @@ class RMZ3Env(gym.Env):
 
         # Initialize state
         self._get_game_data()
+        self._include_lives = include_lives_count
         self._total_play_time = 0
         self._curr_chkpt_time = 0
         self._same_pos_count = 0
@@ -234,6 +235,7 @@ class RMZ3Env(gym.Env):
 
     def step(self, action_id):
 
+        # Take actions
         actions = self.get_action_by_id(action_id)
         actions = [KEY_MAP[a] for a in actions if a is not None]
         if np.random.random() > self.repeat_action_probability:
@@ -262,21 +264,15 @@ class RMZ3Env(gym.Env):
             self._curr_chkpt_time += ((1 + self._new_frameskip) / 60)
 
         # Update next target position
-        if self._curr_stage == 17 and self._prev_stage == 1:
-            (self._next_xpos, self._next_ypos) = (900736, 159743) # go to get weapons
-            if self._weapons == 15:
-                (self._prev_stage, self._prev_checkpoint) = (self._curr_stage, self._curr_checkpoint)
-                (self._next_xpos, self._next_ypos) = (92288, 118783) # Back to portal
-        else:
-            self._get_next_pos()
-
+        self._get_next_pos()
 
         # Calculate reward
-        health_life_reward = self._health // 16 + self._lives // 2 # Reward if still alive
-        # Reward start from second checkpoint in first stage and
-        # not give any reward if character is in Commander base
-        stage_checkpoint_reward = (self._curr_stage / 16 + self._curr_checkpoint / 9) \
-                            if (self._curr_stage < 17) and self._curr_stage >= 1 else 0
+        # Reward if still alive
+        health_life_reward = self._health // 16
+        if self._include_lives:
+            health_life_reward += self.lives // 2
+
+        # Encourage character to move with reward and penalty
         if self._curr_stage in STAGE_CHKPT_LIST:
             if self._curr_checkpoint == STAGE_CHKPT_LIST[self._curr_stage][-1]:
                 pos_reward = 1
@@ -290,25 +286,30 @@ class RMZ3Env(gym.Env):
                     self._same_pos_count += ((1 + self._new_frameskip) / 60)
 
                 self._prev_dis_diff = new_distnace_diff
+        # Encourage to get weapons
+        elif self._curr_stage == 17 and self._weapons != 15:
+                pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
         else:
             pos_reward = 0
+
+        cutsence_reward = 1 if self._curr_checkpoint not in STAGE_CHKPT_LIST[self._curr_stage]\
+                            and set([GBA.KEY_A, GBA.KEY_B, GBA.KEY_START]).issubset(actions)\
+                        else 0
 
         ex_skills_reward = (self._exskills_1 + self._exskills_2 + self._exskills_3) / 48
         boss_killed_reward = 5 if self.check_boss_killed() else 0
         time_penalty = (self._total_play_time / (60 * 60))
-        reward = health_life_reward + stage_checkpoint_reward + ex_skills_reward\
+        reward = health_life_reward + ex_skills_reward\
                     + pos_reward * 2\
                     + boss_killed_reward\
-                    - time_penalty
+                    - time_penalty * 1.5
 
         # Check if done or truncated
         done = self.game_finished()
         truncated = self.check_if_truncated()
 
         # Update total reward
-        reward_diff = reward - self._prev_reward
-        self._total_reward += reward_diff
-        self._prev_reward = reward
+        self._total_reward += reward
 
         # Update best_stage and best_checkpoint
         if self._curr_stage < 17 and\
@@ -330,7 +331,7 @@ class RMZ3Env(gym.Env):
 
         self._step += 1
 
-        return observation, reward_diff, done, truncated, info
+        return observation, reward, done, truncated, info
     
     def _get_next_pos(self):
         # if not in commander base
@@ -344,6 +345,11 @@ class RMZ3Env(gym.Env):
                     if str(next_chkpt) in POSITIONS[str(self._curr_stage)]:
                         pos_list = POSITIONS[str(self._curr_stage)][str(next_chkpt)]
                         (self._next_xpos, self._next_ypos) = (pos_list[0], pos_list[1])
+        if self._curr_stage == 17:
+            if self._prev_stage == 1:
+                (self._next_xpos, self._next_ypos) = (900736, 159743) # go to get weapons
+            if self._weapons == 15:
+                (self._next_xpos, self._next_ypos) = (92160, 118783) # Back to portal
 
         
     def check_boss_killed(self) -> bool:
@@ -353,8 +359,8 @@ class RMZ3Env(gym.Env):
     
     def check_if_truncated(self) -> bool:
         return (self.max_run_time is not None and (self._step >= self.max_run_time // (1 + self._new_frameskip))) or\
-                self._same_pos_count > 30 or\
-                (self._health <= 0 and self._lives <= 0)or\
+                self._same_pos_count > 40 or\
+                ((self._health <= 0 and self._lives <= 0) if self._include_lives else self._health <= 0)or\
                 ((self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint) and\
                 self._curr_chkpt_time > 60)
 
@@ -378,7 +384,6 @@ class RMZ3Env(gym.Env):
             self.gba.core.run_frame()
 
         self._get_game_data()
-        self._prev_reward = 0
         self._total_play_time = 0
         self._curr_chkpt_time = 0
         self._same_pos_count = 0
@@ -467,6 +472,7 @@ def make_RMZ3Env(
         render_mode: Literal["human", "rgb_array"] | None = "human",
         frameskip: int | tuple[int, int] | tuple[int, int, int] = 0,
         max_run_time: int | None = None,
+        include_lives_count: bool = False,
         mgba_silence: bool = False,
         to_resize: bool = True,
         to_grayscale: bool = False,

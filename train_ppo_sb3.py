@@ -4,97 +4,90 @@ import sys
 from typing import Any, Dict, Tuple, Union
 
 from env_setup import *
-import mlflow
 import numpy as np
 from RMZ3Env import make_RMZ3Env
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from stable_baselines3 import PPO
-import torch
 import torch.nn as nn
+import wandb
+from wandb.integration.sb3 import WandbCallback
 
-torch.set_num_threads(NUM_ACTORS)
+# wandb.login(host="http://localhost:8080")
 
 PATH = Path("RL/PPO")
 PATH.mkdir(parents=True, exist_ok=True)
 
-class MLflowOutputFormat(KVWriter):
-    """
-    Dumps key/value pairs into MLflow's numeric format.
-    """
+cfg = {
+    "env_config":{
+        "gba_rom": GBA_ROM,
+        "gba_sav": GBA_SAV,
+        "max_run_time": MAX_TIME,
+        "mgba_silence": SILENCE,
+        "use_framestack": FRAMESTACK,
+        "record": False,
+        "record_path": PATH.joinpath("videos/")},
+    "policy": "CnnPolicy",
+    "total_timesteps": TOTAL_TIMESTEPS,
+    "policy_kwargs": {
+            "activation_fn": nn.ReLU,
+        },
+    "n_steps": N_STEPS,
+    "batch_size": BATCH_SIZE,
+    }
 
-    def write(
-        self,
-        key_values: Dict[str, Any],
-        key_excluded: Dict[str, Union[str, Tuple[str, ...]]],
-        step: int = 0,
-    ) -> None:
-
-        for (key, value), (_, excluded) in zip(
-            sorted(key_values.items()), sorted(key_excluded.items())
-        ):
-
-            if excluded is not None and "mlflow" in excluded:
-                continue
-
-            if isinstance(value, np.ScalarType):
-                if not isinstance(value, str):
-                    mlflow.log_metric(key, value, step)
-
-logger = Logger(
-    folder=None,
-    output_formats=[HumanOutputFormat(sys.stdout), MLflowOutputFormat()],
-)
+run = wandb.init(
+    id = "Basic PPO",
+    project = "PPO",
+    config = cfg,
+    sync_tensorboard=True,
+    monitor_gym=True
+    )
 
 # Create environments
 def make_env():
     def _init():
         env = make_RMZ3Env(
-            gba_rom = GBA_ROM,
-            gba_sav = GBA_SAV,
-            render_mode = RENDER_MODE,
-            max_episode_steps = MAX_STEPS,
-            mgba_silence = SILENCE,
+            gba_rom = cfg["env_config"]["gba_rom"],
+            gba_sav = cfg["env_config"]["gba_sav"],
+            max_run_time = cfg["env_config"]["max_run_time"],
+            mgba_silence = cfg["env_config"]["mgba_silence"],
             use_framestack = 0,
-            to_resize = RESIZE,
-            to_grayscale = True
             )
-        return env
+        return Monitor(env)
     return _init
 
-envs = [make_env() for _ in range(POPSIZE)]
+envs = [make_env() for _ in range(NUM_ACTORS)]
+envs = SubprocVecEnv(envs, start_method="fork")
 
-envs = VecFrameStack(SubprocVecEnv(envs, start_method="fork"), FRAMESTACK) # use framestack from SB3 instead
-
-policy_kwargs = {
-    "activation_fn": nn.ReLU,
-}
-
-checkpoint_callback = CheckpointCallback(
-  save_freq = 500,
-  save_path = PATH.joinpath("/checkpoints/"),
-  name_prefix = "ppo_model",
-)
+envs = VecFrameStack(envs, cfg["env_config"]["use_framestack"]) # use framestack from SB3 instead
 
 # Setup agent and train
-agent = PPO("CnnPolicy",
-                    envs,
-                    verbose = 1,
-                    policy_kwargs = policy_kwargs,
-                    device = "cuda:0"
-                    )
+agent = PPO(cfg["policy"],
+            envs,
+            verbose = 1,
+            policy_kwargs = cfg["policy_kwargs"],
+            n_steps = cfg["n_steps"],
+            batch_size = cfg["batch_size"],
+            tensorboard_log=f"runs/{run.id}"
+            )
 
-agent.set_logger(logger)
 start_time = datetime.now()
-agent.learn(total_timesteps = TOTAL_TIMESTEPS,
-            progress_bar=True,
-            log_interval=10,
-            callback=checkpoint_callback)
-
-agent.save(path = PATH.joinpath("/final_model/"))
-    
+agent.learn(total_timesteps = cfg["total_timesteps"],
+            progress_bar = True,
+            log_interval = 1,
+            callback = WandbCallback(
+            gradient_save_freq = 1,
+            model_save_path = f"models/{run.id}",
+            model_save_freq = 2048 * NUM_ACTORS * 50,
+            verbose = 1,
+        ),
+)
 end_time = datetime.now()
+
+run.finish()
+    
 f = open(PATH.joinpath("training_duration.txt"), "w+")
 f.write(f"Time taken in training:{end_time - start_time}")
 f.close

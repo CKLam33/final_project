@@ -2,20 +2,15 @@ import torch
 import torch.nn as nn
 from evotorch.decorators import pass_info
 
-from AttentionModel import AttentionModel
-
 @pass_info
 class CNN(nn.Module):
     def __init__(
         self,
         obs_shape: tuple,
         act_length: int,
-        use_AttentionModel: bool = False,
         **kwargs
     ):
         super().__init__()
-
-        self.use_AttentionModel = use_AttentionModel
 
         # Extract channels from observation shape (H, W, C)
         in_channels = obs_shape[-1]
@@ -49,15 +44,11 @@ class CNN(nn.Module):
 
             cnn_out_dim = self.flatten(self.cnn(dummy_input)).shape[1]
 
-        
-        self.attention = AttentionModel(64)
-            
         # Final output layer
-        self.fcout = nn.Sequential(nn.Linear(cnn_out_dim, act_length), nn.ReLU())
+        self.fc = nn.Sequential(nn.Linear(cnn_out_dim, act_length), nn.ReLU())
 
     def forward(self, x):
         # Normalize the input
-        x = x / 255.0
         if len(x.shape) == 2:
             # Input shape: (W, H) -> (C, H, W), for grayscale
             x = x.unsqueeze(0).permute(0, 2, 1)
@@ -72,14 +63,9 @@ class CNN(nn.Module):
 
         # Apply CNN
         cnn_out = self.cnn(x)
-
-        if self.use_AttentionModel:
-            attn_out = self.attention(cnn_out)
-            flattened = self.flatten(attn_out)
-        else:
-            # Get final output
-            flattened = self.flatten(cnn_out)
-        out = self.fcout(flattened[-1, :]).detach()
+        # Get final output
+        flattened = self.flatten(cnn_out)
+        out = self.fc(flattened[-1, :]).detach()
 
         # return a np.int46 value
         return out

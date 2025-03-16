@@ -5,25 +5,36 @@ os.environ["WANDB_MODE"] = "offline"
 # Env setup
 GBA_ROM = "./GBA_ROM/Rockman Zero 3 (Japan).gba"
 GBA_SAV = "./GBA_ROM/Rockman Zero 3 (Japan).sav"
-MAX_TIME = 60 * 60 * 60 # 1 hours of frames
 SILENCE = True
-FRAMESTACK = 5
+MAX_TIME = 60 * 60 * 60 # 1 hours of frames
+FRAMESKIP = (0, 1)
+FRAMESTACK = 2
 OBS_NORM = True
 INCLUDE_LIVES = False
+# Specific for GymNE
+NUM_EPD = 3
 
 # LSTM setup
-HIDDEN_SIZE = 256
-NUM_LAYERS = 1
+HIDDEN_SIZE = 128
+NUM_LAYERS = 2
 
 # PGPE setup
-NUM_ACTORS = POPSIZE = os.cpu_count()
+NUM_ACTORS = 100
+POPSIZE = NUM_ACTORS
 GENERATIONS = 500
-RAD_INIT = 5
-CENTER_LR = 0.05
+# Follow setup from Parameter-exploring Policy Gradients
+# by Sehnke et al. (2010)
+STDEV_INIT = 2.0 
+CENTER_LR = 0.2
 STD_LR = 0.1
+# Clipup setup
+# Follow setup from
+# Parameter-exploring Policy GradientsClipUp: A Simple and Powerful Optimizer for
+# Distribution-based Policy Evolution
+# by Toklu et al. (2020)
+MAX_SPD = CENTER_LR * 2 # max speed for Clipup
+STD_MAX_CHG = 0.3
+OPT_LR = MAX_SPD / 2
 
-# PPO setup
+# Recurrent PPO setup
 TOTAL_TIMESTEPS = MAX_TIME * POPSIZE
-N_STEPS = MAX_TIME // GENERATIONS
-BATCH_SIZE = 512
-

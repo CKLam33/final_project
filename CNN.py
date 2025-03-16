@@ -8,6 +8,8 @@ class CNN(nn.Module):
         self,
         obs_shape: tuple,
         act_length: int,
+        feature_dim: int = 512,
+        activation_fn: nn.Module = nn.Tanh(),
         **kwargs
     ):
         super().__init__()
@@ -23,9 +25,8 @@ class CNN(nn.Module):
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
+            nn.Flatten()
         )
-
-        self.flatten = nn.Flatten()
         
         # Calculate CNN output size dynamically
         with torch.no_grad():
@@ -42,10 +43,10 @@ class CNN(nn.Module):
             elif len(obs_shape) == 4:
                 dummy_input = torch.zeros(*obs_shape).permute(0, 3, 2, 1)  # Channel-first for Conv2d
 
-            cnn_out_dim = self.flatten(self.cnn(dummy_input)).shape[1]
+            cnn_out_dim = self.cnn(dummy_input).shape[1]
 
         # Final output layer
-        self.fc = nn.Sequential(nn.Linear(cnn_out_dim, act_length), nn.ReLU())
+        self.fc = nn.Sequential(nn.Linear(cnn_out_dim, feature_dim), activation_fn, nn.Linear(feature_dim, act_length))
 
     def forward(self, x):
         # Normalize the input
@@ -64,8 +65,7 @@ class CNN(nn.Module):
         # Apply CNN
         cnn_out = self.cnn(x)
         # Get final output
-        flattened = self.flatten(cnn_out)
-        out = self.fc(flattened[-1, :]).detach()
+        out = self.fc(cnn_out[-1, :]).detach()
 
         # return a np.int46 value
         return out

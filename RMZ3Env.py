@@ -33,7 +33,7 @@ KEY_MAP = {
 
 # Dict of stages-checkpoints
 STAGE_CHKPT_LIST = {
-    1: [3, 4, 7, 6], # Intro
+    1: [3, 5, 7], # Intro
     2: [2, 3, 4, 5, 6, 7], # Flizard
     3: [2, 3, 4, 5, 6, 7, 8, 9], # Childre
     4: [2, 3, 4, 5, 6], # Hellbat
@@ -112,13 +112,50 @@ class RMZ3Env(gym.Env):
         # Generate all possible product of buttons.
         # So that even the AI change the key setting accidentally,
         # it still about to control the character
-        arrow = [None, "up", "down", "right", "left"]
+        up_down = [None, "up", "down"]
+        left_right = [None, "left", "right"]
         L = [None, "L"]
         R = [None, "R"]
         A = [None, "A"]
         B = [None, "B"]
-        self.actions = list(product(arrow, L, R, A, B))
-        self.actions.append((None, None, None, None, "start"))
+        self.actions = [
+            action for action in product(up_down, left_right, L, R, A, B)\
+            # Exlcude some products
+            if action != (None, None, "L", "R", None, None) \
+                or action != ("up", "left", None, None, None, None) \
+                or action != ("up", "right", None, None, None, None) \
+                or action != ("down", "left", None, None, None, None) \
+                or action != ("down", "right", None, None, None, None) \
+                or action != ("up", "left", "L", None, None, None) \
+                or action != ("up", "right", "L", None, None, None) \
+                or action != ("down", "left", "L", None, None, None) \
+                or action != ("down", "right", "L", None, None, None) \
+                or action != ("up", "left", None, "R", None, None) \
+                or action != ("up", "right", None, "R", None, None) \
+                or action != ("down", "left", None, "R", None, None) \
+                or action != ("down", "right", None, "R", None, None) \
+                or action != ("up", "left", None, None, "A", None) \
+                or action != ("up", "right", None, None, "A", None) \
+                or action != ("down", "left", None, None, "A", None) \
+                or action != ("down", "right", None, None, "A", None) \
+                or action != ("up", "left", "L", None, "A", None) \
+                or action != ("up", "right", "L", None, "A", None) \
+                or action != ("down", "left", "L", None, "A", None) \
+                or action != ("down", "right", "L", None, "A", None) \
+                or action != ("up", "left", None, "R", "A", None) \
+                or action != ("up", "right", None, "R", "A", None) \
+                or action != ("down", "left", None, "R", "A", None) \
+                or action != ("down", "right", None, "R", "A", None) \
+                or action != ("up", "left", "L", "R", None, None) \
+                or action != ("up", "right", "L", "R", None, None) \
+                or action != ("down", "left", "L", "R", None, None) \
+                or action != ("down", "right", "L", "R", None, None) \
+                or action != ("up", "left", "L", "R", "A", None) \
+                or action != ("up", "right", "L", "R", "A", None) \
+                or action != ("down", "left", "L", "R", "A", None) \
+                or action != ("down", "right", "L", "R", "A", None) \
+        ]
+        self.actions.insert(1, (None, None, None, None, None, "start"))
         self.action_space = Discrete(len(self.actions))
 
         # Building the observation_space
@@ -140,6 +177,7 @@ class RMZ3Env(gym.Env):
         self._screen = None
         self._clock = None
 
+        self._prev_reward = 0
         self._total_reward = 0
         self._step = 0
 
@@ -175,10 +213,11 @@ class RMZ3Env(gym.Env):
 
         # Initialize state
         self._get_game_data()
+        self._prev_dialogue = self.gba.read_u16(0x02030318)
+        self._prev_lives = self._lives
         self._include_lives = include_lives_count
         self._total_play_time = 0
         self._curr_chkpt_time = 0
-        self._same_pos_count = 0
         self.best_stage = self._curr_stage
         self.best_checkpoint = self._curr_checkpoint
         self._prev_stage = self._curr_stage
@@ -213,7 +252,7 @@ class RMZ3Env(gym.Env):
     def cal_distance_diff(self, curr_pos: tuple, next_pos: tuple):
         return np.linalg.norm(np.array(curr_pos) - np.array(next_pos))
 
-    def get_action_by_id(self, action_id: int) -> tuple[Any, Any]:
+    def get_action_by_id(self, action_id: int) -> tuple[Any, Any, Any, Any, Any, Any]:
         if action_id < 0 or action_id > len(self.actions):
             raise ValueError(f"action_id {action_id} is invalid")
         return self.actions[action_id]
@@ -236,10 +275,13 @@ class RMZ3Env(gym.Env):
     def step(self, action_id):
 
         # Take actions
-        actions = self.get_action_by_id(action_id)
-        actions = [KEY_MAP[a] for a in actions if a is not None]
-        if np.random.random() > self.repeat_action_probability:
-            self.gba.core.set_keys(*actions)
+        if action_id > 0:
+            actions = self.get_action_by_id(action_id)
+            actions = [KEY_MAP[a] for a in actions if a is not None]
+            if np.random.random() > self.repeat_action_probability:
+                self.gba.core.set_keys(*actions)
+        else:
+            actions = None
 
         # Skip frames
         if isinstance(self.frameskip, tuple):
@@ -268,40 +310,42 @@ class RMZ3Env(gym.Env):
 
         # Calculate reward
         # Reward if still alive
-        health_life_reward = self._health // 16
+        health_life_reward = self._health / 16
         if self._include_lives:
-            health_life_reward += self.lives // 2
+            health_life_reward += self._lives / 2
 
         # Encourage character to move with reward and penalty
-        if self._curr_stage in STAGE_CHKPT_LIST:
-            if self._curr_checkpoint == STAGE_CHKPT_LIST[self._curr_stage][-1]:
-                pos_reward = 1
-            else:
-                new_distnace_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
-                if new_distnace_diff != self._prev_dis_diff:
-                    pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
-                    self._same_pos_count = 0
-                else:
-                    pos_reward = 0
-                    self._same_pos_count += ((1 + self._new_frameskip) / 60)
+        new_distnace_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
 
-                self._prev_dis_diff = new_distnace_diff
-        # Encourage to get weapons
-        elif self._curr_stage == 17 and self._weapons != 15:
-                pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
+        if self._curr_stage in STAGE_CHKPT_LIST \
+            and self._curr_checkpoint == STAGE_CHKPT_LIST[self._curr_stage][-1]:
+                pos_reward = 1
+        elif (self._curr_stage in STAGE_CHKPT_LIST \
+            and (self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint)) \
+                and self._prev_dis_diff != new_distnace_diff:
+                    pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
         else:
             pos_reward = 0
+        self._prev_dis_diff = new_distnace_diff
 
-        cutsence_reward = 1 if self._curr_checkpoint not in STAGE_CHKPT_LIST[self._curr_stage]\
-                            and set([GBA.KEY_A, GBA.KEY_B, GBA.KEY_START]).issubset(actions)\
-                        else 0
+        cutscene_reward = 0
+        if self.gba.read_u16(0x02030318) != self._prev_dialogue and actions is not None:
+            if (self.gba.read_u16(0x02030318) > 0xF000 and GBA.KEY_START in actions) \
+                or\
+                (((self.gba.read_u16(0x02030318) > 0x7000 and self.gba.read_u16(0x02030318) < 0x8000) \
+                    or (self.gba.read_u16(0x02030318) > 0x3000 and self.gba.read_u16(0x02030318) < 0x4000)) \
+                and (GBA.KEY_A in actions or GBA.KEY_B in actions)):
+                    cutscene_reward += 1
+
+        self._prev_dialogue = self.gba.read_u16(0x02030318)
 
         ex_skills_reward = (self._exskills_1 + self._exskills_2 + self._exskills_3) / 48
         boss_killed_reward = 5 if self.check_boss_killed() else 0
         time_penalty = (self._total_play_time / (60 * 60))
         reward = health_life_reward + ex_skills_reward\
-                    + pos_reward * 2\
+                    + pos_reward\
                     + boss_killed_reward\
+                    + cutscene_reward\
                     - time_penalty * 1.5
 
         # Check if done or truncated
@@ -309,7 +353,9 @@ class RMZ3Env(gym.Env):
         truncated = self.check_if_truncated()
 
         # Update total reward
-        self._total_reward += reward
+        reward_diff = reward - self._prev_reward
+        self._total_reward += reward_diff
+        self._prev_reward = reward
 
         # Update best_stage and best_checkpoint
         if self._curr_stage < 17 and\
@@ -317,6 +363,7 @@ class RMZ3Env(gym.Env):
                 (self.best_stage, self.best_checkpoint) = (self._curr_stage, self._curr_checkpoint)
 
         info = {
+            "actions_taken": actions,
             "_health": self._health,
             "_lives": self._lives,
             "_total_play_time": self._total_play_time,
@@ -331,7 +378,7 @@ class RMZ3Env(gym.Env):
 
         self._step += 1
 
-        return observation, reward, done, truncated, info
+        return observation, reward_diff, done, truncated, info
     
     def _get_next_pos(self):
         # if not in commander base
@@ -358,11 +405,10 @@ class RMZ3Env(gym.Env):
                  (self._curr_stage == 16 and self._final_subbosses_room in FINAL_STAGE_BOSSES[self._curr_checkpoint]))
     
     def check_if_truncated(self) -> bool:
-        return (self.max_run_time is not None and (self._step >= self.max_run_time // (1 + self._new_frameskip))) or\
-                self._same_pos_count > 40 or\
-                ((self._health <= 0 and self._lives <= 0) if self._include_lives else self._health <= 0)or\
+        return (self.max_run_time is not None and self._total_play_time >= self.max_run_time) or\
+                (self._health <= 0 and self._lives <= 0 if self._include_lives else self._health <= 0) or\
                 ((self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint) and\
-                self._curr_chkpt_time > 60)
+                self._curr_chkpt_time > 50)
 
     
     def game_finished(self) -> bool:
@@ -386,7 +432,6 @@ class RMZ3Env(gym.Env):
         self._get_game_data()
         self._total_play_time = 0
         self._curr_chkpt_time = 0
-        self._same_pos_count = 0
         self.best_stage = self._curr_stage
         self.best_checkpoint = self._curr_checkpoint
         self._prev_stage = self._curr_stage
@@ -408,6 +453,7 @@ class RMZ3Env(gym.Env):
             "distance_diff": np.inf,
         }
 
+        self._prev_reward = 0
         self._total_reward = 0
         self._step = 0
         

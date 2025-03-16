@@ -10,9 +10,12 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from sb3_contrib import RecurrentPPO
+import torch
 import torch.nn as nn
 import wandb
 from wandb.integration.sb3 import WandbCallback
+
+torch.set_num_threads(100)
 
 # wandb.login(host="http://localhost:8080")
 
@@ -24,10 +27,14 @@ cfg = {
         "gba_rom": GBA_ROM,
         "gba_sav": GBA_SAV,
         "max_run_time": MAX_TIME,
+        "include_lives_count": INCLUDE_LIVES,
+        "render_mode": "rgb_array",
+        "frameskip": FRAMESKIP,
         "mgba_silence": SILENCE,
         "use_framestack": FRAMESTACK,
         "record": False,
         "record_path": PATH.joinpath("videos/")},
+    "num_envs": POPSIZE,
     "policy": "CnnLstmPolicy",
     "total_timesteps": TOTAL_TIMESTEPS,
     "policy_kwargs": {
@@ -35,13 +42,11 @@ cfg = {
             "n_lstm_layers": NUM_LAYERS,
             "activation_fn": nn.ReLU,
         },
-    "n_steps": N_STEPS,
-    "batch_size": BATCH_SIZE,
     }
 
 run = wandb.init(
-    id = "Recurrent PPO",
-    project = "PPO",
+    id = "PPO",
+    project = "Recurrent PPO",
     config = cfg,
     sync_tensorboard=True,
     monitor_gym=True
@@ -53,6 +58,7 @@ def make_env():
         env = make_RMZ3Env(
             gba_rom = cfg["env_config"]["gba_rom"],
             gba_sav = cfg["env_config"]["gba_sav"],
+            frameskip = cfg["env_config"]["frameskip"],
             max_run_time = cfg["env_config"]["max_run_time"],
             mgba_silence = cfg["env_config"]["mgba_silence"],
             use_framestack = 0,
@@ -60,7 +66,7 @@ def make_env():
         return Monitor(env)
     return _init
 
-envs = [make_env() for _ in range(NUM_ACTORS)]
+envs = [make_env() for _ in range(cfg["num_envs"])]
 envs = SubprocVecEnv(envs, start_method="fork")
 
 envs = VecFrameStack(envs, cfg["env_config"]["use_framestack"]) # use framestack from SB3 instead
@@ -70,8 +76,6 @@ agent = RecurrentPPO(cfg["policy"],
                      envs,
                      verbose = 1,
                      policy_kwargs = cfg["policy_kwargs"],
-            n_steps = cfg["n_steps"],
-                     batch_size = cfg["batch_size"],
                      tensorboard_log=f"runs/{run.id}"
                      )
 
@@ -81,16 +85,15 @@ agent.learn(total_timesteps = cfg["total_timesteps"],
             log_interval = 1,
             callback = WandbCallback(
             gradient_save_freq = 1,
-            model_save_path = f"models/{run.id}",
-            model_save_freq = 2048 * NUM_ACTORS * 50,
             verbose = 1,
         ),
 )
 end_time = datetime.now()
 
+agent.save(PATH.joinpath(f"RPPO_model_{datetime.now()}"))
+
 run.finish()
 
-f = open(PATH.joinpath("training_duration.txt"), "w+")
-f.write(f"Time taken in training:{end_time - start_time}")
-f.close
-envs.close()
+with open(PATH.joinpath(f"training_duration_{datetime.now()}.txt"), "w") as f:
+    f.write(f"Time taken in training:{end_time - start_time}")
+    f.close()

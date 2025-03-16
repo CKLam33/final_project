@@ -11,8 +11,6 @@ FRAMESKIP = (0, 1)
 FRAMESTACK = 2
 OBS_NORM = True
 INCLUDE_LIVES = False
-# Specific for GymNE
-NUM_EPD = 3
 
 # LSTM setup
 HIDDEN_SIZE = 128

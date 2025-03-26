@@ -7,7 +7,7 @@ from pathlib import Path
 import gymnasium as gym
 from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
-from gymnasium.wrappers import ResizeObservation, GrayscaleObservation, RecordVideo, FrameStackObservation
+from gymnasium.wrappers import ResizeObservation, GrayscaleObservation, RecordVideo
 import mgba.image
 import numpy as np
 from pygba import PyGBA
@@ -177,7 +177,6 @@ class RMZ3Env(gym.Env):
         self._screen = None
         self._clock = None
 
-        self._prev_reward = 0
         self._total_reward = 0
         self._step = 0
 
@@ -317,17 +316,24 @@ class RMZ3Env(gym.Env):
         # Encourage character to move with reward and penalty
         new_distnace_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
 
-        if self._curr_stage in STAGE_CHKPT_LIST \
-            and self._curr_checkpoint == STAGE_CHKPT_LIST[self._curr_stage][-1]:
-                pos_reward = 1
-        elif (self._curr_stage in STAGE_CHKPT_LIST \
+        if (self._curr_stage in STAGE_CHKPT_LIST \
             and (self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint)) \
-                and self._prev_dis_diff != new_distnace_diff:
-                    pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
+            and self._curr_checkpoint != STAGE_CHKPT_LIST[self._curr_stage][-1] \
+            and self._prev_dis_diff != new_distnace_diff:
+                pos_reward = np.sinh(1 / (self._prev_dis_diff - new_distnace_diff))
         else:
             pos_reward = 0
         self._prev_dis_diff = new_distnace_diff
 
+        # reward if pressed up button to select stage to fight in New Resistance Base
+        if self._curr_stage == 17 and self._weapons == 15 \
+            and (self._curr_x_pos, self._curr_y_pos) == (92160, 118783) \
+            and actions is not None and GBA.KEY_UP in actions:
+                open_bosseslist_reward = 1
+        else:
+            open_bosseslist_reward = 0
+
+        # reward if pass dialogues
         cutscene_reward = 0
         if self.gba.read_u16(0x02030318) != self._prev_dialogue and actions is not None:
             if (self.gba.read_u16(0x02030318) > 0xF000 and GBA.KEY_START in actions) \
@@ -339,23 +345,22 @@ class RMZ3Env(gym.Env):
 
         self._prev_dialogue = self.gba.read_u16(0x02030318)
 
-        ex_skills_reward = (self._exskills_1 + self._exskills_2 + self._exskills_3) / 48
         boss_killed_reward = 5 if self.check_boss_killed() else 0
         time_penalty = (self._total_play_time / (60 * 60))
-        reward = health_life_reward + ex_skills_reward\
-                    + pos_reward\
-                    + boss_killed_reward\
-                    + cutscene_reward\
-                    - time_penalty * 1.5
+
+        reward = health_life_reward \
+                + pos_reward \
+                + open_bosseslist_reward \
+                + boss_killed_reward \
+                + cutscene_reward \
+                - time_penalty * 1.5
 
         # Check if done or truncated
         done = self.game_finished()
         truncated = self.check_if_truncated()
 
         # Update total reward
-        reward_diff = reward - self._prev_reward
-        self._total_reward += reward_diff
-        self._prev_reward = reward
+        self._total_reward += reward
 
         # Update best_stage and best_checkpoint
         if self._curr_stage < 17 and\
@@ -372,27 +377,25 @@ class RMZ3Env(gym.Env):
             "current_checkpoint": self._curr_checkpoint,
             "best_stage": self.best_stage,
             "best_checkpoint": self.best_checkpoint,
-            "diff_diff": new_distnace_diff,
             "distance_diff": new_distnace_diff
         }
 
         self._step += 1
 
-        return observation, reward_diff, done, truncated, info
+        return observation, reward, done, truncated, info
     
     def _get_next_pos(self):
-        # if not in commander base
+        # if not in New Resistance Base
         # target will be move to next position
         if self._curr_stage < 17:
             chkpts_len = len(STAGE_CHKPT_LIST[self._curr_stage])
             if self._curr_checkpoint in STAGE_CHKPT_LIST[self._curr_stage]:
                 idx = STAGE_CHKPT_LIST[self._curr_stage].index(self._curr_checkpoint)
                 if idx < chkpts_len - 1:
-                    next_chkpt = STAGE_CHKPT_LIST[self._curr_stage][idx + 1]
-                    if str(next_chkpt) in POSITIONS[str(self._curr_stage)]:
+                    if str(STAGE_CHKPT_LIST[self._curr_stage][idx + 1]) in POSITIONS[str(self._curr_stage)]:
                         pos_list = POSITIONS[str(self._curr_stage)][str(next_chkpt)]
                         (self._next_xpos, self._next_ypos) = (pos_list[0], pos_list[1])
-        if self._curr_stage == 17:
+        elif self._curr_stage == 17:
             if self._prev_stage == 1:
                 (self._next_xpos, self._next_ypos) = (900736, 159743) # go to get weapons
             if self._weapons == 15:
@@ -405,10 +408,11 @@ class RMZ3Env(gym.Env):
                  (self._curr_stage == 16 and self._final_subbosses_room in FINAL_STAGE_BOSSES[self._curr_checkpoint]))
     
     def check_if_truncated(self) -> bool:
-        return (self.max_run_time is not None and self._total_play_time >= self.max_run_time) or\
-                (self._health <= 0 and self._lives <= 0 if self._include_lives else self._health <= 0) or\
-                ((self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint) and\
-                self._curr_chkpt_time > 50)
+        return (self.max_run_time is not None and self._total_play_time >= self.max_run_time) \
+                or (self._health <= 0 and self._lives <= 0 if self._include_lives else self._health <= 0) \
+                or ((self._prev_stage, self._prev_checkpoint) == (self._curr_stage, self._curr_checkpoint) \
+                    and self._curr_chkpt_time > 50) \
+                or self._total_reward < 0
 
     
     def game_finished(self) -> bool:
@@ -440,24 +444,24 @@ class RMZ3Env(gym.Env):
         (self._next_xpos, self._next_ypos) = (init_next_pos[0],init_next_pos[1])
         self._prev_dis_diff = self.cal_distance_diff((self._curr_x_pos, self._curr_y_pos), (self._next_xpos, self._next_ypos))
 
+        self._total_reward = 0
+        self._step = 0
+        
+        observation = self._get_observation()
+
         info = {
+            "actions_taken": actions,
             "_health": self._health,
             "_lives": self._lives,
             "_total_play_time": self._total_play_time,
             "total_rewards": self._total_reward,
             "current_stage": self._curr_stage,
             "current_checkpoint": self._curr_checkpoint,
-            "next_location": (self._next_xpos, self._next_ypos),
             "best_stage": self.best_stage,
-            "best_checkpoint": self.best_checkpoint,
-            "distance_diff": np.inf,
+            "best_checkpoint": self.best_checkpoint,s
+            "distance_diff": self._prev_dis_diff,
         }
 
-        self._prev_reward = 0
-        self._total_reward = 0
-        self._step = 0
-        
-        observation = self._get_observation()
         return observation, info
 
     def render(self):
@@ -520,9 +524,10 @@ def make_RMZ3Env(
         max_run_time: int | None = None,
         include_lives_count: bool = False,
         mgba_silence: bool = False,
-        to_resize: bool = True,
+        to_resize: bool = False,
+        scrn_w: int = 64,
+        scrn_h: int = 64,
         to_grayscale: bool = False,
-        use_framestack: int = 4,
         record: bool = False,
         record_path: str | Path = None,
         **kwargs
@@ -532,14 +537,13 @@ def make_RMZ3Env(
                    render_mode = render_mode,
                    frameskip = frameskip,
                    max_run_time = max_run_time,
+                   include_lives_count = include_lives_count,
                    mgba_silence = mgba_silence,
                    **kwargs)
     if record and record_path is not None:
         env = RecordVideo(env, video_folder = record_path)
     if to_resize:
-        env = ResizeObservation(env, (120, 80))
+        env = ResizeObservation(env, (scrn_w, scrn_h))
     if to_grayscale:
         env = GrayscaleObservation(env, keep_dim=True)
-    if use_framestack > 0:
-        env = FrameStackObservation(env, use_framestack)
     return env

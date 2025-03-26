@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 import torch
 import wandb
 from wandb.integration.sb3 import WandbCallback
@@ -12,7 +12,7 @@ from RMZ3Env import make_RMZ3Env
 
 torch.set_num_threads(NUM_ACTORS)
 
-PATH = Path("RL/RecurrentPPO")
+PATH = Path("RL/PPO")
 PATH.mkdir(parents=True, exist_ok=True)
 
 cfg = {
@@ -31,17 +31,13 @@ cfg = {
         "record": False,
         "record_path": PATH.joinpath("videos/")},
     "num_envs": POPSIZE,
-    "policy": "CnnLstmPolicy",
+    "policy": "CnnPolicy",
     "total_timesteps": TOTAL_TIMESTEPS,
-    "policy_kwargs": {
-            "lstm_hidden_size": HIDDEN_SIZE,
-            "n_lstm_layers": NUM_LAYERS,
-        },
     }
 
 run = wandb.init(
     id = "PPO",
-    project = "Recurrent PPO",
+    project = "PPO",
     config = cfg,
     sync_tensorboard=True,
     monitor_gym=True
@@ -60,12 +56,12 @@ envs = [make_env() for _ in range(cfg["num_envs"])]
 envs = SubprocVecEnv(envs, start_method="fork")
 
 # Setup agent and train
-agent = RecurrentPPO(cfg["policy"],
-                     envs,
-                     verbose = 1,
-                     policy_kwargs = cfg["policy_kwargs"],
-                     tensorboard_log=f"runs/{run.id}"
-                     )
+agent = PPO(cfg["policy"],
+            envs,
+            verbose = 1,
+            policy_kwargs = cfg["policy_kwargs"],
+            tensorboard_log=f"runs/{run.id}"
+            )
 
 start_time = datetime.now()
 agent.learn(total_timesteps = cfg["total_timesteps"],
@@ -78,7 +74,7 @@ agent.learn(total_timesteps = cfg["total_timesteps"],
 )
 end_time = datetime.now()
 
-agent.save(PATH.joinpath(f"RPPO_model_{datetime.now()}"))
+agent.save(PATH.joinpath(f"PPO_model_{datetime.now()}"))
 
 run.finish()
 
@@ -86,3 +82,4 @@ with open(PATH.joinpath(f"training_duration_{datetime.now()}.txt"), "w") as f:
     f.write(f"Time taken in training:{end_time - start_time}")
     f.close()
 envs.close()
+

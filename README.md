@@ -1,7 +1,8 @@
 # Final project CM3070
 Project template: Kane and Abel – Ais that play games
 
-Please ensure you are running Ubuntu and Python 3.11
+Please ensure your system is Ubuntu.
+The application involves Python 3.11 and Docker.
 Install libraries using requirements.txt
 
 `pip install -r requirements.txt`

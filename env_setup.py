@@ -36,5 +36,10 @@ CENTER_LR = MAX_SPD / 2
 MOMENTUM = 0.9
 STD_MAX_CHG = 0.3
 
+#if number_interaction is used in PGPE
+POP_MAX = POPSIZE * 8
+NUM_INTERACT = POPSIZE * MAX_TIME * (60 / 4) * 0.75
+
+
 # Recurrent PPO setup
 TOTAL_TIMESTEPS = POPSIZE * MAX_TIME * (60 / 4)

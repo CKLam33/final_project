@@ -115,5 +115,5 @@ with lzma.open(PATH.joinpath(f"searcher_status_{datetime.now()}.xz"), "wb", pres
     pickle.dump(searcher.status, f)
 
 with open(PATH.joinpath(f"training_duration_{datetime.now()}.txt"), "w", encoding="utf-8") as f:
-    f.write(f"Time taken in training:{end_time - start_time}")
+    f.write(f"Time taken in training: {end_time - start_time}")
     f.close()

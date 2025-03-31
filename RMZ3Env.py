@@ -368,10 +368,9 @@ class RMZ3Env(gym.Env):
                 (self.best_stage, self.best_checkpoint) = (self._curr_stage, self._curr_checkpoint)
 
         info = {
-            "actions_taken": actions,
-            "_health": self._health,
-            "_lives": self._lives,
-            "_total_play_time": self._total_play_time,
+            "health": self._health,
+            "lives": self._lives,
+            "total_play_time": self._total_play_time,
             "total_rewards": self._total_reward,
             "current_stage": self._curr_stage,
             "current_checkpoint": self._curr_checkpoint,
@@ -450,16 +449,16 @@ class RMZ3Env(gym.Env):
         observation = self._get_observation()
 
         info = {
-            "actions_taken": actions,
-            "_health": self._health,
-            "_lives": self._lives,
-            "_total_play_time": self._total_play_time,
+            "health": self._health,
+            "lives": self._lives,
+            "total_play_time": self._total_play_time,
             "total_rewards": self._total_reward,
             "current_stage": self._curr_stage,
             "current_checkpoint": self._curr_checkpoint,
+            "next_location": (self._next_xpos, self._next_ypos),
             "best_stage": self.best_stage,
-            "best_checkpoint": self.best_checkpoint,s
-            "distance_diff": self._prev_dis_diff,
+            "best_checkpoint": self.best_checkpoint,
+            "distance_diff": np.inf,
         }
 
         return observation, info
@@ -541,7 +540,7 @@ def make_RMZ3Env(
                    mgba_silence = mgba_silence,
                    **kwargs)
     if record and record_path is not None:
-        env = RecordVideo(env, video_folder = record_path)
+        env = RecordVideo(env, video_folder = record_path, episode_trigger=lambda t: t % 1 == 0)
     if to_resize:
         env = ResizeObservation(env, (scrn_w, scrn_h))
     if to_grayscale:

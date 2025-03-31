@@ -1,6 +1,5 @@
-import os
-
-os.environ["WANDB_MODE"] = "offline"
+import wandb
+wandb.login(host="http://localhost:8080")
 
 # Env setup
 GBA_ROM = "./GBA_ROM/Rockman Zero 3 (Japan).gba"

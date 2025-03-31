@@ -16,8 +16,6 @@ from wandb.integration.sb3 import WandbCallback
 
 torch.set_num_threads(100)
 
-# wandb.login(host="http://localhost:8080")
-
 PATH = Path("RL/PPO")
 PATH.mkdir(parents=True, exist_ok=True)
 

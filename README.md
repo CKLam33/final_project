@@ -13,4 +13,4 @@ run this command with sudo if needed
 
 Before run the scripts (train_*.py), please edit NUM_ACTORS and POPSIZE to meet the number of cores your computer has
 
-Use "test_model.ipynb" to test the trained models. Remember to change the file nameinside the file.
+Use "test_model.ipynb" to test the trained models (agent with CNNLSTM policy only currently). Remember to change the file nameinside the file.

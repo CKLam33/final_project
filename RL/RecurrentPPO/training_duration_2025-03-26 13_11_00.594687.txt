@@ -1,1 +1,0 @@
-Time taken in training:11:00:49.916752
